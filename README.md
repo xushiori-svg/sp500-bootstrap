@@ -9,6 +9,7 @@ sp500-bootstrap/
 ├── README.md
 ├── sp500-bootstrap.Rproj
 ├── scripts/
+│   ├── 00_theme.R         # shared colors and chart style (used by 02 and 03)
 │   ├── 01_download.R      # download S&P 500 prices from FRED, compute daily returns
 │   ├── 02_bootstrap.R     # bootstrap distribution and 100 confidence intervals
 │   └── 03_test.R          # null distribution, rejection region and p-value
@@ -25,4 +26,4 @@ sp500-bootstrap/
 ## How to reproduce
 1. Open `sp500-bootstrap.Rproj` in RStudio.
 2. Install packages once: `install.packages(c("dplyr", "plotly", "htmlwidgets"))`
-3. Run the scripts in order: `01_download.R`, `02_bootstrap.R`, `03_test.R`. The random seed is fixed, so results are the same each time.
+3. Run the scripts in order (00_theme.R is loaded automatically): `01_download.R`, `02_bootstrap.R`, `03_test.R`. The random seed is fixed, so results are the same each time.

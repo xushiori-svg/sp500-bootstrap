@@ -1,54 +1,90 @@
 library(dplyr)
 library(plotly)
+source("scripts/00_theme.R")
 
 returns <- read.csv("data/sp500_returns.csv")
 returns$date <- as.Date(returns$date)
 
-last_year <- returns |> filter(date > max(date) - 365)
-obs <- mean(last_year$ret)
-shifted <- last_year$ret - obs
-
-set.seed(6400)
-null <- replicate(10000, mean(sample(shifted, replace = TRUE)))
-p_value <- mean(abs(null) >= abs(obs))
-
-results <- data.frame(days = nrow(last_year), observed_mean = obs, p_value = p_value)
-write.csv(results, "output/test_last_year.csv", row.names = FALSE)
-results
-
-alphas <- c(0.01, 0.05, 0.10)
-breaks <- seq(min(null), max(null), length.out = 61)
-mids <- (head(breaks, -1) + tail(breaks, -1)) / 2
-counts <- as.vector(table(cut(null, breaks, include.lowest = TRUE)))
-
-fig3 <- plot_ly()
-for (a in alphas) {
-  cut_off <- quantile(abs(null), 1 - a)
-  reject <- abs(mids) >= cut_off
-  fig3 <- fig3 |>
-    add_bars(x = mids[!reject], y = counts[!reject], marker = list(color = "#9ecae1"),
-             name = "Do not reject", visible = a == 0.05) |>
-    add_bars(x = mids[reject], y = counts[reject], marker = list(color = "#d7301f"),
-             name = "Rejection region", visible = a == 0.05)
+null_test <- function(x, reps = 10000) {
+  obs <- mean(x)
+  null <- replicate(reps, mean(sample(x - obs, replace = TRUE)))
+  list(obs = obs, null = null, p = mean(abs(null) >= abs(obs)))
 }
 
-steps <- lapply(seq_along(alphas), function(j) {
-  list(method = "restyle",
-       args = list("visible", as.list(rep(seq_along(alphas) == j, each = 2))),
-       label = paste0("alpha = ", alphas[j]))
-})
+set.seed(6400)
+years <- c(1, 2, 5, 10)
+tests <- lapply(years, function(y) null_test(returns$ret[returns$date > max(returns$date) - 365 * y]))
+names(tests) <- paste(years, ifelse(years == 1, "year", "years"))
+
+results <- data.frame(window = names(tests),
+                      days = sapply(years, function(y) sum(returns$date > max(returns$date) - 365 * y)),
+                      observed_mean = sapply(tests, `[[`, "obs"),
+                      p_value = sapply(tests, `[[`, "p"))
+write.csv(results, "output/test_results.csv", row.names = FALSE)
+results
+
+hist_bars <- function(null, cut_off) {
+  breaks <- seq(-max(abs(null)), max(abs(null)), length.out = 61)
+  mids <- (head(breaks, -1) + tail(breaks, -1)) / 2
+  counts <- as.vector(table(cut(null, breaks, include.lowest = TRUE)))
+  data.frame(mid = mids, count = counts, reject = abs(mids) >= cut_off)
+}
+
+add_null <- function(p, h, visible) {
+  p |>
+    add_bars(data = filter(h, !reject), x = ~mid, y = ~count, name = "Do not reject",
+             marker = list(color = blue), visible = visible,
+             hovertemplate = "Average return: %{x:.3f}%<br>Count: %{y}<extra></extra>") |>
+    add_bars(data = filter(h, reject), x = ~mid, y = ~count, name = "Rejection region",
+             marker = list(color = red), visible = visible,
+             hovertemplate = "Average return: %{x:.3f}%<br>Count: %{y}<extra></extra>")
+}
+
+t1 <- tests[["1 year"]]
+alphas <- c(0.01, 0.05, 0.10)
+fig3 <- plot_ly()
+for (a in alphas) {
+  fig3 <- add_null(fig3, hist_bars(t1$null, quantile(abs(t1$null), 1 - a)), a == 0.05)
+}
 
 fig3 <- fig3 |>
-  layout(title = paste0("Average daily return if the true mean were zero, p-value = ",
-                        round(p_value, 3)),
-         xaxis = list(title = "Average daily return (%)"),
-         yaxis = list(title = "Count"),
-         bargap = 0,
-         shapes = list(list(type = "line", x0 = obs, x1 = obs, y0 = 0, y1 = 1, yref = "paper",
-                            line = list(color = "black", width = 2))),
-         annotations = list(list(x = obs, y = 1, yref = "paper", text = "Last year's average",
-                                 showarrow = FALSE, yanchor = "bottom")),
-         sliders = list(list(active = 1, currentvalue = list(prefix = "Significance level: "),
-                             steps = steps)))
+  style_fig(paste0("If the true mean were zero: last year's average and the rejection region (p = ",
+                   round(t1$p, 2), ")"),
+            "Average daily return (%)", "Number of simulations",
+            bargap = 0.05,
+            shapes = list(vline(t1$obs, width = 3)),
+            annotations = list(list(x = t1$obs, y = 1, yref = "paper",
+                                    text = paste0("Last year: ", round(t1$obs, 3), "%"),
+                                    showarrow = FALSE, xanchor = "left", yanchor = "bottom")),
+            sliders = list(slider(paste0("α = ", alphas), 2, 2, "Significance level: ")))
 
 htmlwidgets::saveWidget(fig3, "figures/fig3_null_test.html")
+
+fig4 <- plot_ly()
+for (k in names(tests)) {
+  t <- tests[[k]]
+  fig4 <- add_null(fig4, hist_bars(t$null, quantile(abs(t$null), 0.95)), k == "1 year")
+}
+
+labels <- paste0(names(tests), " (p = ", formatC(results$p_value, format = "f", digits = 3), ")")
+shapes <- lapply(tests, function(t) list(vline(t$obs, width = 3)))
+
+steps <- lapply(seq_along(tests), function(j) {
+  list(method = "update",
+       args = list(list(visible = as.list(rep(seq_along(tests) == j, each = 2))),
+                   list(shapes = shapes[[j]])),
+       label = labels[j])
+})
+sl <- slider(labels, 2, 1, "Data used: ")
+sl$steps <- steps
+
+fig4 <- fig4 |>
+  style_fig("More data makes the null distribution narrower (α = 0.05)",
+            "Average daily return (%)", "Number of simulations",
+            bargap = 0.05,
+            xaxis = list(title = "Average daily return (%)", gridcolor = light, zeroline = FALSE,
+                         range = c(-0.25, 0.25)),
+            shapes = shapes[[1]],
+            sliders = list(sl))
+
+htmlwidgets::saveWidget(fig4, "figures/fig4_more_data.html")
